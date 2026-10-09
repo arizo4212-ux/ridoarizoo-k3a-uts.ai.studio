@@ -23,6 +23,7 @@ import {
   formatIDR,
   formatDateID,
 } from './lib/assets.ts';
+import { apiService } from './lib/apiClient.ts';
 import {
   AdminWorkspace,
   AdminCategory,
@@ -96,14 +97,12 @@ export default function App() {
     setTimeout(() => setStoreNotice(null), 4000);
   };
 
-  // Load Storefront Catalog from Real PostgreSQL Backend
+  // Load Storefront Catalog from Real PostgreSQL Backend (with static-host resilience)
   const fetchCatalog = useCallback(async () => {
     setIsLoadingCatalog(true);
     setCatalogError(null);
     try {
-      const res = await fetch('/api/catalog');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memuat katalog Rupa Gems');
+      const data = await apiService.getCatalog();
       setCategories(data.categories || []);
       setProducts(data.products || []);
     } catch (err: any) {
@@ -117,19 +116,8 @@ export default function App() {
   const fetchCustomerOrders = useCallback(async (emailOrInvoice?: string) => {
     setIsLoadingOrders(true);
     try {
-      const params = new URLSearchParams();
-      if (emailOrInvoice && emailOrInvoice.trim() !== '') {
-        if (emailOrInvoice.includes('@')) {
-          params.set('email', emailOrInvoice.trim());
-        } else {
-          params.set('orderNumber', emailOrInvoice.trim());
-        }
-      }
-      const res = await fetch(`/api/orders/lookup?${params.toString()}`);
-      const data = await res.json();
-      if (res.ok) {
-        setLookupOrders(data.orders || []);
-      }
+      const data = await apiService.lookupOrders(emailOrInvoice);
+      setLookupOrders(data.orders || []);
     } finally {
       setIsLoadingOrders(false);
     }
@@ -147,20 +135,15 @@ export default function App() {
     return headers;
   }, [adminSessionToken, firebaseToken]);
 
-  // Load Full Admin Data from PostgreSQL
+  // Load Full Admin Data from PostgreSQL (with static-host resilience)
   const fetchAdminOverview = useCallback(async () => {
     if (!adminSessionToken && !firebaseToken) return;
     try {
-      const res = await fetch('/api/admin/overview', {
-        headers: authHeaders,
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setCategories(data.categories || []);
-        setProducts(data.products || []);
-        setAdminOrders(data.orders || []);
-        setAdminCustomers(data.customers || []);
-      }
+      const data = await apiService.getAdminOverview(authHeaders);
+      setCategories(data.categories || []);
+      setProducts(data.products || []);
+      setAdminOrders(data.orders || []);
+      setAdminCustomers(data.customers || []);
     } catch (err) {
       console.error('Failed to load admin overview:', err);
     }
@@ -311,27 +294,21 @@ export default function App() {
 
     setIsSubmittingOrder(true);
     try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: firebaseUser?.uid,
-          customerName: checkoutForm.customerName,
-          customerEmail: checkoutForm.customerEmail,
-          customerPhone: checkoutForm.customerPhone,
-          shippingAddress: checkoutForm.shippingAddress,
-          paymentMethod: checkoutForm.paymentMethod,
-          paymentBankSender: checkoutForm.paymentBankSender,
-          paymentAccountName: checkoutForm.paymentAccountName || checkoutForm.customerName,
-          paymentProofData: checkoutForm.paymentProofData || undefined,
-          items: cart.map((c) => ({
-            productId: c.product.id,
-            quantity: c.quantity,
-          })),
-        }),
+      const data = await apiService.createOrder({
+        uid: firebaseUser?.uid,
+        customerName: checkoutForm.customerName,
+        customerEmail: checkoutForm.customerEmail,
+        customerPhone: checkoutForm.customerPhone,
+        shippingAddress: checkoutForm.shippingAddress,
+        paymentMethod: checkoutForm.paymentMethod,
+        paymentBankSender: checkoutForm.paymentBankSender,
+        paymentAccountName: checkoutForm.paymentAccountName || checkoutForm.customerName,
+        paymentProofData: checkoutForm.paymentProofData || undefined,
+        items: cart.map((c) => ({
+          productId: c.product.id,
+          quantity: c.quantity,
+        })),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal membuat pesanan');
 
       setConfirmedOrder(data.order);
       setCart([]);
@@ -349,17 +326,11 @@ export default function App() {
   const handleUploadProofForOrder = async (order: AdminOrder, base64Data: string) => {
     setUploadingOrderId(order.id);
     try {
-      const res = await fetch(`/api/orders/${order.id}/payment-proof`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          paymentProofData: base64Data,
-          paymentBankSender: order.paymentBankSender || 'Bank Transfer BCA',
-          paymentAccountName: order.customerName,
-        }),
+      await apiService.uploadPaymentProof(order.id, {
+        paymentProofData: base64Data,
+        paymentBankSender: order.paymentBankSender || 'Bank Transfer BCA',
+        paymentAccountName: order.customerName,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal mengunggah bukti pembayaran');
       await fetchCustomerOrders(lookupQuery);
       triggerNotice(`Bukti pembayaran untuk ${order.orderNumber} berhasil diunggah dan siap direview Admin.`);
     } catch (err: any) {
@@ -374,17 +345,7 @@ export default function App() {
     e.preventDefault();
     setAuthError(null);
     try {
-      const res = await fetch('/api/auth/admin-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: adminEmail,
-          password: adminPassword,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal masuk ke Admin Panel');
-
+      const data = await apiService.adminLogin(adminEmail, adminPassword);
       setAdminSessionToken(data.token);
       setIsAdminWorkspaceOpen(true);
     } catch (err: any) {

@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { resolveProductImage, formatIDR, formatDateID } from '../lib/assets.ts';
 import { exportSalesReportToPDF, exportSalesReportToExcel } from '../lib/exportReports.ts';
+import { apiService } from '../lib/apiClient.ts';
 
 export interface AdminCategory {
   id: number;
@@ -271,19 +272,11 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const url = editingProduct ? `/api/admin/products/${editingProduct.id}` : '/api/admin/products';
-      const method = editingProduct ? 'PUT' : 'POST';
-      const res = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify(productForm),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan produk');
-
+      await apiService.saveProduct(
+        editingProduct ? editingProduct.id : null,
+        productForm,
+        authHeaders
+      );
       setIsProductModalOpen(false);
       await onRefreshData();
       showNotice('success', editingProduct ? 'Produk & stok berhasil diperbarui.' : 'Produk baru berhasil ditambahkan.');
@@ -295,15 +288,7 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
   const handleQuickStockAdjust = async (prod: AdminProduct, delta: number) => {
     const newStock = Math.max(0, prod.stock + delta);
     try {
-      const res = await fetch(`/api/admin/products/${prod.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify({ stock: newStock }),
-      });
-      if (!res.ok) throw new Error('Gagal memperbarui stok');
+      await apiService.saveProduct(prod.id, { stock: newStock, categoryId: prod.categoryId }, authHeaders);
       await onRefreshData();
       showNotice('success', `Stok ${prod.name} diperbarui menjadi ${newStock} unit.`);
     } catch (err: any) {
@@ -313,11 +298,7 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
 
   const handleDeleteProduct = async (prod: AdminProduct) => {
     try {
-      const res = await fetch(`/api/admin/products/${prod.id}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      });
-      if (!res.ok) throw new Error('Gagal menghapus produk');
+      await apiService.deleteProduct(prod.id, authHeaders);
       await onRefreshData();
       showNotice('success', `Produk ${prod.name} telah dihapus.`);
     } catch (err: any) {
@@ -339,20 +320,15 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
           ? 'Bukti transfer diverifikasi valid oleh Admin Keuangan Rupa Gems.'
           : 'Bukti pembayaran tidak sesuai dengan mutasi rekening. Mohon unggah ulang.');
 
-      const res = await fetch(`/api/admin/orders/${order.id}/review`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify({
+      await apiService.reviewOrder(
+        order.id,
+        {
           paymentStatus: decision,
           orderStatus: statusToApply,
           adminNotes: notesToApply,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal memproses verifikasi');
+        },
+        authHeaders
+      );
 
       setInspectingOrder(null);
       setReviewNotes('');
@@ -371,19 +347,13 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
   const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/admin/customers', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify({
+      await apiService.saveCustomer(
+        {
           id: editingCustomer?.id,
           ...customerForm,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan pelanggan');
+        },
+        authHeaders
+      );
       setIsCustomerModalOpen(false);
       await onRefreshData();
       showNotice('success', 'Data pelanggan berhasil disimpan ke database.');
