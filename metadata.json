@@ -1,0 +1,6 @@
+{
+  "name": "Rupa Gems — Fine Gemstone & High Jewelry Marketplace",
+  "description": "Webstore marketplace permata mulia dan perhiasan fine Rupa Gems dengan database PostgreSQL, keranjang belanja, verifikasi bukti pembayaran, dashboard analitik real-time, dan ekspor laporan PDF/Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
