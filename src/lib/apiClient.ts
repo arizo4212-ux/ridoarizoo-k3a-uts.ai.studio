@@ -483,11 +483,116 @@ const INITIAL_ORDERS: AdminOrder[] = [
   },
 ];
 
-// In-memory state for static hosting fallback (when deployed to static Vercel without server.ts)
-let fallbackCategories: AdminCategory[] = [...INITIAL_CATEGORIES];
-let fallbackProducts: AdminProduct[] = [...INITIAL_PRODUCTS];
-let fallbackCustomers: AdminCustomer[] = [...INITIAL_CUSTOMERS];
-let fallbackOrders: AdminOrder[] = [...INITIAL_ORDERS];
+// Persistent state for static hosting fallback (when deployed to static Vercel without server.ts)
+// Uses window.localStorage + BroadcastChannel so orders placed in one tab immediately appear in Admin Panel in another tab.
+const STORAGE_KEYS = {
+  PRODUCTS: 'rupa_gems_store_products_v2',
+  ORDERS: 'rupa_gems_store_orders_v2',
+  CUSTOMERS: 'rupa_gems_store_customers_v2',
+};
+
+function readPersisted<T>(key: string, defaultData: T): T {
+  if (typeof window === 'undefined') return defaultData;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      window.localStorage.setItem(key, JSON.stringify(defaultData));
+      return defaultData;
+    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as unknown as T;
+    }
+    return defaultData;
+  } catch {
+    return defaultData;
+  }
+}
+
+function writePersisted<T>(key: string, data: T): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(data));
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel('rupa_gems_sync_channel');
+      bc.postMessage({ type: 'DATA_UPDATED', key, timestamp: Date.now() });
+      bc.close();
+    }
+  } catch {
+    // Ignore quota errors
+  }
+}
+
+function getFallbackCategories(): AdminCategory[] {
+  return [...INITIAL_CATEGORIES];
+}
+
+function getFallbackProducts(): AdminProduct[] {
+  return readPersisted<AdminProduct[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+}
+
+function setFallbackProducts(next: AdminProduct[]): void {
+  writePersisted(STORAGE_KEYS.PRODUCTS, next);
+}
+
+function getFallbackOrders(): AdminOrder[] {
+  return readPersisted<AdminOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+}
+
+function setFallbackOrders(next: AdminOrder[]): void {
+  writePersisted(STORAGE_KEYS.ORDERS, next);
+}
+
+function getFallbackCustomers(): AdminCustomer[] {
+  const savedUsers = readPersisted<AdminCustomer[]>(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+  const allOrders = getFallbackOrders();
+
+  const map = new Map<string, AdminCustomer>();
+  for (const c of savedUsers) {
+    map.set(c.email.toLowerCase(), { ...c });
+  }
+
+  for (const o of allOrders) {
+    const key = o.customerEmail.toLowerCase();
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, {
+        id: o.userId || o.id + 1000,
+        uid: `cust-${key.replace(/[^a-z0-9]/g, '-')}`,
+        name: o.customerName,
+        email: o.customerEmail,
+        phone: o.customerPhone,
+        address: o.shippingAddress,
+        role: 'customer',
+        orderCount: 1,
+        totalSpent: o.totalAmount,
+        lastOrderDate: o.createdAt,
+      });
+    } else {
+      if (o.customerPhone && existing.phone === '-') existing.phone = o.customerPhone;
+      if (o.shippingAddress && existing.address === '-') existing.address = o.shippingAddress;
+    }
+  }
+
+  return Array.from(map.values()).map((c) => {
+    const userOrders = allOrders.filter(
+      (o) => o.customerEmail.toLowerCase() === c.email.toLowerCase()
+    );
+    const totalSpent = userOrders
+      .filter((o) => o.paymentStatus !== 'rejected')
+      .reduce((sum, o) => sum + o.totalAmount, 0);
+    return {
+      ...c,
+      orderCount: userOrders.length,
+      totalSpent,
+      lastOrderDate: userOrders.length > 0 ? userOrders[0].createdAt : c.lastOrderDate,
+    };
+  });
+}
+
+function setFallbackCustomers(next: AdminCustomer[]): void {
+  writePersisted(STORAGE_KEYS.CUSTOMERS, next);
+}
 
 /**
  * Helper to parse JSON safely. If the host (e.g., static Vercel deployment) returns
@@ -534,8 +639,8 @@ export const apiService = {
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
         return {
-          categories: [...fallbackCategories],
-          products: [...fallbackProducts],
+          categories: getFallbackCategories(),
+          products: getFallbackProducts(),
         };
       }
       throw err;
@@ -555,15 +660,16 @@ export const apiService = {
       return await fetchJsonOrThrowFallback(`/api/orders/lookup?${params.toString()}`);
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
+        const allOrders = getFallbackOrders();
         const q = (query || '').trim().toLowerCase();
         const filtered = q
-          ? fallbackOrders.filter(
+          ? allOrders.filter(
               (o) =>
                 o.orderNumber.toLowerCase().includes(q) ||
                 o.customerEmail.toLowerCase().includes(q) ||
                 o.customerName.toLowerCase().includes(q)
             )
-          : fallbackOrders;
+          : allOrders;
         return { orders: [...filtered] };
       }
       throw err;
@@ -572,22 +678,31 @@ export const apiService = {
 
   async createOrder(payload: any): Promise<{ order: AdminOrder }> {
     try {
-      return await fetchJsonOrThrowFallback('/api/orders', {
+      const result = await fetchJsonOrThrowFallback('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('rupa_gems_sync_channel');
+        bc.postMessage({ type: 'ORDER_CREATED', timestamp: Date.now() });
+        bc.close();
+      }
+      return result;
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
+        const currentProducts = getFallbackProducts();
+        const currentOrders = getFallbackOrders();
+        const currentCustomers = getFallbackCustomers();
+
         let totalAmount = 0;
         const orderItemsList: AdminOrder['items'] = [];
 
-        for (const item of payload.items || []) {
-          const prod = fallbackProducts.find((p) => p.id === item.productId);
-          if (!prod) continue;
+        const updatedProducts = currentProducts.map((prod) => {
+          const item = (payload.items || []).find((i: any) => i.productId === prod.id);
+          if (!item) return prod;
           const subtotal = prod.price * item.quantity;
           totalAmount += subtotal;
-          prod.stock = Math.max(0, prod.stock - item.quantity);
           orderItemsList.push({
             id: Date.now() + Math.floor(Math.random() * 1000),
             productId: prod.id,
@@ -598,12 +713,18 @@ export const apiService = {
             quantity: item.quantity,
             subtotal,
           });
-        }
+          return {
+            ...prod,
+            stock: Math.max(0, prod.stock - item.quantity),
+          };
+        });
+
+        setFallbackProducts(updatedProducts);
 
         const newOrder: AdminOrder = {
-          id: fallbackOrders.length + 1,
+          id: currentOrders.length + 1 + Math.floor(Math.random() * 1000),
           orderNumber: `INV-RG-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`,
-          userId: fallbackCustomers.length + 1,
+          userId: currentCustomers.length + 1,
           customerName: payload.customerName,
           customerEmail: payload.customerEmail,
           customerPhone: payload.customerPhone,
@@ -620,18 +741,32 @@ export const apiService = {
           items: orderItemsList,
         };
 
-        fallbackOrders = [newOrder, ...fallbackOrders];
+        const nextOrders = [newOrder, ...currentOrders];
+        setFallbackOrders(nextOrders);
 
-        const existingCust = fallbackCustomers.find(
+        const existingCust = currentCustomers.find(
           (c) => c.email.toLowerCase() === payload.customerEmail.toLowerCase()
         );
         if (existingCust) {
-          existingCust.orderCount += 1;
-          existingCust.lastOrderDate = newOrder.createdAt;
+          setFallbackCustomers(
+            currentCustomers.map((c) =>
+              c.email.toLowerCase() === payload.customerEmail.toLowerCase()
+                ? {
+                    ...c,
+                    name: payload.customerName || c.name,
+                    phone: payload.customerPhone || c.phone,
+                    address: payload.shippingAddress || c.address,
+                    orderCount: c.orderCount + 1,
+                    totalSpent: c.totalSpent + totalAmount,
+                    lastOrderDate: newOrder.createdAt,
+                  }
+                : c
+            )
+          );
         } else {
-          fallbackCustomers = [
+          setFallbackCustomers([
             {
-              id: fallbackCustomers.length + 1,
+              id: currentCustomers.length + 1 + Math.floor(Math.random() * 1000),
               uid: payload.uid || `cust-${Date.now()}`,
               name: payload.customerName,
               email: payload.customerEmail,
@@ -639,11 +774,11 @@ export const apiService = {
               address: payload.shippingAddress,
               role: 'customer',
               orderCount: 1,
-              totalSpent: 0,
+              totalSpent: totalAmount,
               lastOrderDate: newOrder.createdAt,
             },
-            ...fallbackCustomers,
-          ];
+            ...currentCustomers,
+          ]);
         }
 
         return { order: newOrder };
@@ -654,14 +789,21 @@ export const apiService = {
 
   async uploadPaymentProof(orderId: number, payload: any): Promise<{ order: AdminOrder }> {
     try {
-      return await fetchJsonOrThrowFallback(`/api/orders/${orderId}/payment-proof`, {
+      const result = await fetchJsonOrThrowFallback(`/api/orders/${orderId}/payment-proof`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('rupa_gems_sync_channel');
+        bc.postMessage({ type: 'PROOF_UPLOADED', timestamp: Date.now() });
+        bc.close();
+      }
+      return result;
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
-        fallbackOrders = fallbackOrders.map((o) =>
+        const currentOrders = getFallbackOrders();
+        const nextOrders = currentOrders.map((o) =>
           o.id === orderId
             ? {
                 ...o,
@@ -672,7 +814,8 @@ export const apiService = {
               }
             : o
         );
-        const updated = fallbackOrders.find((o) => o.id === orderId)!;
+        setFallbackOrders(nextOrders);
+        const updated = nextOrders.find((o) => o.id === orderId)!;
         return { order: updated };
       }
       throw err;
@@ -694,7 +837,7 @@ export const apiService = {
         ) {
           return {
             token: 'rupa-gems-admin-verified-token-2026',
-            user: fallbackCustomers[0],
+            user: getFallbackCustomers()[0],
           };
         }
         throw new Error(
@@ -718,10 +861,10 @@ export const apiService = {
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
         return {
-          categories: [...fallbackCategories],
-          products: [...fallbackProducts],
-          orders: [...fallbackOrders],
-          customers: [...fallbackCustomers],
+          categories: getFallbackCategories(),
+          products: getFallbackProducts(),
+          orders: getFallbackOrders(),
+          customers: getFallbackCustomers(),
         };
       }
       throw err;
@@ -746,22 +889,24 @@ export const apiService = {
       });
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
-        const cat =
-          fallbackCategories.find((c) => c.id === Number(payload.categoryId)) ||
-          fallbackCategories[0];
+        const cats = getFallbackCategories();
+        const prods = getFallbackProducts();
+        const cat = cats.find((c) => c.id === Number(payload.categoryId)) || cats[0];
         if (editingId) {
-          fallbackProducts = fallbackProducts.map((p) =>
-            p.id === editingId
-              ? {
-                  ...p,
-                  ...payload,
-                  categoryId: cat.id,
-                  categoryName: cat.name,
-                  categorySlug: cat.slug,
-                  price: Number(payload.price ?? p.price),
-                  stock: Number(payload.stock ?? p.stock),
-                }
-              : p
+          setFallbackProducts(
+            prods.map((p) =>
+              p.id === editingId
+                ? {
+                    ...p,
+                    ...payload,
+                    categoryId: cat.id,
+                    categoryName: cat.name,
+                    categorySlug: cat.slug,
+                    price: Number(payload.price ?? p.price),
+                    stock: Number(payload.stock ?? p.stock),
+                  }
+                : p
+            )
           );
         } else {
           const newProd: AdminProduct = {
@@ -769,7 +914,7 @@ export const apiService = {
             categoryId: cat.id,
             categoryName: cat.name,
             categorySlug: cat.slug,
-            sku: payload.sku || `RG-NEW-${fallbackProducts.length + 1}`,
+            sku: payload.sku || `RG-NEW-${prods.length + 1}`,
             name: payload.name,
             slug: payload.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
             description: payload.description,
@@ -781,7 +926,7 @@ export const apiService = {
             certification: payload.certification,
             imageUrl: payload.imageUrl || 'gem_sapphire',
           };
-          fallbackProducts = [...fallbackProducts, newProd];
+          setFallbackProducts([...prods, newProd]);
         }
         return;
       }
@@ -797,7 +942,7 @@ export const apiService = {
       });
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
-        fallbackProducts = fallbackProducts.filter((p) => p.id !== productId);
+        setFallbackProducts(getFallbackProducts().filter((p) => p.id !== productId));
         return;
       }
       throw err;
@@ -824,7 +969,7 @@ export const apiService = {
       });
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
-        fallbackOrders = fallbackOrders.map((o) =>
+        const nextOrders = getFallbackOrders().map((o) =>
           o.id === orderId
             ? {
                 ...o,
@@ -836,6 +981,7 @@ export const apiService = {
               }
             : o
         );
+        setFallbackOrders(nextOrders);
         return;
       }
       throw err;
@@ -854,12 +1000,13 @@ export const apiService = {
       });
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
+        const current = getFallbackCustomers();
         if (payload.id) {
-          fallbackCustomers = fallbackCustomers.map((c) =>
-            c.id === payload.id ? { ...c, ...payload } : c
+          setFallbackCustomers(
+            current.map((c) => (c.id === payload.id ? { ...c, ...payload } : c))
           );
         } else {
-          fallbackCustomers = [
+          setFallbackCustomers([
             {
               id: Date.now(),
               uid: `cust-${Date.now()}`,
@@ -872,8 +1019,8 @@ export const apiService = {
               totalSpent: 0,
               lastOrderDate: new Date().toISOString(),
             },
-            ...fallbackCustomers,
-          ];
+            ...current,
+          ]);
         }
         return;
       }

@@ -833,14 +833,54 @@ export async function getAllCustomersWithStats() {
   try {
     await ensureSeededData();
     const allUsers = await db.select().from(users).orderBy(desc(users.createdAt));
-    const allOrders = await db.select().from(orders);
+    const allOrders = await db.select().from(orders).orderBy(desc(orders.createdAt));
 
-    return allUsers.map((u) => {
+    const customerMap = new Map<
+      string,
+      {
+        id: number;
+        uid: string;
+        name: string;
+        email: string;
+        phone: string;
+        address: string;
+        role: string;
+        createdAt: Date | null;
+      }
+    >();
+
+    for (const u of allUsers) {
+      customerMap.set(u.email.toLowerCase(), u);
+    }
+
+    // Ensure any customer who placed an order is always listed in Data Pelanggan
+    for (const o of allOrders) {
+      const key = o.customerEmail.toLowerCase();
+      const existing = customerMap.get(key);
+      if (!existing) {
+        customerMap.set(key, {
+          id: o.userId || o.id + 1000,
+          uid: `cust-${key.replace(/[^a-z0-9]/g, '-')}`,
+          name: o.customerName,
+          email: o.customerEmail,
+          phone: o.customerPhone,
+          address: o.shippingAddress,
+          role: 'customer',
+          createdAt: o.createdAt,
+        });
+      } else {
+        // Enrich phone/address if previously '-'
+        if (existing.phone === '-' && o.customerPhone) existing.phone = o.customerPhone;
+        if (existing.address === '-' && o.shippingAddress) existing.address = o.shippingAddress;
+      }
+    }
+
+    return Array.from(customerMap.values()).map((u) => {
       const userOrders = allOrders.filter(
         (o) => o.userId === u.id || o.customerEmail.toLowerCase() === u.email.toLowerCase()
       );
       const totalSpent = userOrders
-        .filter((o) => o.paymentStatus === 'approved')
+        .filter((o) => o.paymentStatus !== 'rejected')
         .reduce((acc, o) => acc + o.totalAmount, 0);
       return {
         ...u,

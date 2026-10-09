@@ -186,6 +186,22 @@ export default function App() {
   useEffect(() => {
     if (isAdminWorkspaceOpen) {
       fetchAdminOverview();
+      const interval = setInterval(() => {
+        fetchAdminOverview();
+      }, 4000);
+
+      let bc: BroadcastChannel | null = null;
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel('rupa_gems_sync_channel');
+        bc.onmessage = () => {
+          fetchAdminOverview();
+        };
+      }
+
+      return () => {
+        clearInterval(interval);
+        if (bc) bc.close();
+      };
     }
   }, [isAdminWorkspaceOpen, fetchAdminOverview]);
 
@@ -347,6 +363,11 @@ export default function App() {
     try {
       const data = await apiService.adminLogin(adminEmail, adminPassword);
       setAdminSessionToken(data.token);
+      const overview = await apiService.getAdminOverview({ 'x-admin-session': data.token });
+      setCategories(overview.categories || []);
+      setProducts(overview.products || []);
+      setAdminOrders(overview.orders || []);
+      setAdminCustomers(overview.customers || []);
       setIsAdminWorkspaceOpen(true);
     } catch (err: any) {
       setAuthError(err.message);
@@ -361,6 +382,11 @@ export default function App() {
       const token = await cred.user.getIdToken();
       setFirebaseToken(token);
       if (openAdminAfter) {
+        const overview = await apiService.getAdminOverview({ Authorization: `Bearer ${token}` });
+        setCategories(overview.categories || []);
+        setProducts(overview.products || []);
+        setAdminOrders(overview.orders || []);
+        setAdminCustomers(overview.customers || []);
         setIsAdminWorkspaceOpen(true);
       } else {
         triggerNotice(`Selamat datang kembali, ${cred.user.displayName || cred.user.email}`);
@@ -422,6 +448,7 @@ export default function App() {
             href="#semua-koleksi"
             onClick={(e) => {
               e.preventDefault();
+              setSearchQuery('');
               setActiveStoreSection('catalog');
               setSelectedCategory('all');
             }}
@@ -437,6 +464,7 @@ export default function App() {
             href="#permata-lepas"
             onClick={(e) => {
               e.preventDefault();
+              setSearchQuery('');
               setActiveStoreSection('catalog');
               setSelectedCategory('permata-mulia-lepas');
             }}
@@ -452,6 +480,7 @@ export default function App() {
             href="#perhiasan-fine"
             onClick={(e) => {
               e.preventDefault();
+              setSearchQuery('');
               setActiveStoreSection('catalog');
               setSelectedCategory('cincin-perhiasan-fine');
             }}
@@ -467,6 +496,7 @@ export default function App() {
             href="#riwayat-pesanan"
             onClick={(e) => {
               e.preventDefault();
+              setSearchQuery('');
               setActiveStoreSection('orders');
               fetchCustomerOrders();
             }}
@@ -480,9 +510,18 @@ export default function App() {
           </a>
           <a
             href="#admin-panel"
-            onClick={(e) => {
+            onClick={async (e) => {
               e.preventDefault();
+              setSearchQuery('');
               if (adminSessionToken || firebaseToken) {
+                const headers: Record<string, string> = {};
+                if (adminSessionToken) headers['x-admin-session'] = adminSessionToken;
+                if (firebaseToken) headers['Authorization'] = `Bearer ${firebaseToken}`;
+                const overview = await apiService.getAdminOverview(headers);
+                setCategories(overview.categories || []);
+                setProducts(overview.products || []);
+                setAdminOrders(overview.orders || []);
+                setAdminCustomers(overview.customers || []);
                 setIsAdminWorkspaceOpen(true);
               } else {
                 setActiveStoreSection('admin_login');

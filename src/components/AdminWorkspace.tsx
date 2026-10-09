@@ -412,7 +412,10 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
 
           <nav className="p-3 space-y-1">
             <button
-              onClick={() => setActiveTab('dashboard')}
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('dashboard');
+              }}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'dashboard'
                   ? 'bg-amber-600 text-white'
@@ -424,7 +427,10 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('products')}
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('products');
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'products'
                   ? 'bg-amber-600 text-white'
@@ -439,7 +445,10 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('approvals')}
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('approvals');
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'approvals'
                   ? 'bg-amber-600 text-white'
@@ -454,7 +463,10 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('orders')}
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('orders');
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'orders'
                   ? 'bg-amber-600 text-white'
@@ -469,7 +481,10 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('customers')}
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('customers');
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'customers'
                   ? 'bg-amber-600 text-white'
@@ -484,7 +499,10 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('reports')}
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('reports');
+              }}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'reports'
                   ? 'bg-amber-600 text-white'
