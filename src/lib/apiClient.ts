@@ -4,6 +4,16 @@ import {
   AdminOrder,
   AdminCustomer,
 } from '../components/AdminWorkspace.tsx';
+import { firestore } from './firebase.ts';
+import {
+  collection,
+  doc,
+  setDoc,
+  getDocs,
+  query,
+  orderBy,
+  onSnapshot,
+} from 'firebase/firestore';
 
 const SAMPLE_RECEIPT_SVG = `data:image/svg+xml;utf8,${encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="480" height="620" viewBox="0 0 480 620">
@@ -594,6 +604,48 @@ function setFallbackCustomers(next: AdminCustomer[]): void {
   writePersisted(STORAGE_KEYS.CUSTOMERS, next);
 }
 
+// Background Cloud Sync to Firebase Firestore so any device (Vercel, Mobile, Dosen) syncs in real-time
+async function syncOrderToFirestore(order: AdminOrder): Promise<void> {
+  try {
+    const orderDocRef = doc(firestore, 'orders', String(order.id || order.orderNumber));
+    await setDoc(orderDocRef, {
+      ...order,
+      syncedAt: new Date().toISOString(),
+    }, { merge: true });
+  } catch (err) {
+    console.warn('Firestore sync note:', err);
+  }
+}
+
+async function loadFirestoreOrders(): Promise<AdminOrder[]> {
+  try {
+    const ordersCol = collection(firestore, 'orders');
+    const snapshot = await getDocs(ordersCol);
+    if (!snapshot.empty) {
+      const remoteOrders: AdminOrder[] = [];
+      snapshot.forEach((d) => {
+        const data = d.data() as AdminOrder;
+        remoteOrders.push(data);
+      });
+      if (remoteOrders.length > 0) {
+        // Merge with local fallback
+        const existing = getFallbackOrders();
+        const mergedMap = new Map<string, AdminOrder>();
+        for (const o of existing) mergedMap.set(o.orderNumber, o);
+        for (const o of remoteOrders) mergedMap.set(o.orderNumber, o);
+        const mergedList = Array.from(mergedMap.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setFallbackOrders(mergedList);
+        return mergedList;
+      }
+    }
+  } catch (err) {
+    console.warn('Firestore fetch note:', err);
+  }
+  return getFallbackOrders();
+}
+
 /**
  * Helper to parse JSON safely. If the host (e.g., static Vercel deployment) returns
  * an HTML 404 page ("The page could not be found...") instead of JSON from server.ts,
@@ -743,6 +795,7 @@ export const apiService = {
 
         const nextOrders = [newOrder, ...currentOrders];
         setFallbackOrders(nextOrders);
+        syncOrderToFirestore(newOrder);
 
         const existingCust = currentCustomers.find(
           (c) => c.email.toLowerCase() === payload.customerEmail.toLowerCase()
@@ -816,6 +869,7 @@ export const apiService = {
         );
         setFallbackOrders(nextOrders);
         const updated = nextOrders.find((o) => o.id === orderId)!;
+        syncOrderToFirestore(updated);
         return { order: updated };
       }
       throw err;
@@ -860,10 +914,11 @@ export const apiService = {
       });
     } catch (err) {
       if (err instanceof StaticHostFallbackError) {
+        const liveOrders = await loadFirestoreOrders();
         return {
           categories: getFallbackCategories(),
           products: getFallbackProducts(),
-          orders: getFallbackOrders(),
+          orders: liveOrders,
           customers: getFallbackCustomers(),
         };
       }
