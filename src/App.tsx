@@ -287,18 +287,53 @@ export default function App() {
     [cart]
   );
 
-  // Handle File Upload to Base64 for Payment Receipt Proof
+  // Handle File Upload to Base64 for Payment Receipt Proof (with safe auto-compression)
   const handleReceiptFileChange = (
     e: React.ChangeEvent<HTMLInputElement>,
     onBase64Ready: (base64: string) => void
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Check file size and compress via canvas if large photo taken by mobile phone
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        onBase64Ready(reader.result);
-      }
+      const resultStr = reader.result;
+      if (typeof resultStr !== 'string') return;
+
+      const img = new Image();
+      img.onload = () => {
+        const maxWidth = 1200;
+        const maxHeight = 1200;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.85);
+          onBase64Ready(compressed);
+        } else {
+          onBase64Ready(resultStr);
+        }
+      };
+      img.onerror = () => {
+        onBase64Ready(resultStr);
+      };
+      img.src = resultStr;
     };
     reader.readAsDataURL(file);
   };
@@ -984,12 +1019,28 @@ export default function App() {
                     </div>
 
                     <div className="md:col-span-5 flex flex-col sm:flex-row md:flex-col items-start sm:items-center md:items-end justify-end gap-3">
-                      <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-stone-800 bg-stone-100 hover:bg-stone-200 rounded-lg cursor-pointer transition-colors">
+                      {ord.paymentProofData && (
+                        <div className="flex items-center gap-2 text-[11px] text-stone-600 bg-stone-50 p-2 rounded-lg border border-stone-200">
+                          <img
+                            src={ord.paymentProofData}
+                            alt="Bukti Transfer"
+                            className="w-10 h-10 object-cover rounded border border-stone-300 bg-white"
+                          />
+                          <div>
+                            <span className="font-semibold text-stone-800 block">Bukti Terunggah</span>
+                            <span className="text-[10px] text-stone-500">Klik tombol di bawah jika ingin mengganti</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <label className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-stone-900 hover:bg-stone-800 rounded-lg cursor-pointer transition-colors shadow-sm">
                         <Upload className="w-3.5 h-3.5" />
                         <span>
                           {uploadingOrderId === ord.id
-                            ? 'Mengunggah...'
-                            : 'Unggah / Perbarui Bukti Transfer'}
+                            ? 'Menyimpan ke Server...'
+                            : ord.paymentProofData
+                            ? 'Ganti Bukti Transfer'
+                            : 'Unggah Bukti Transfer'}
                         </span>
                         <input
                           type="file"
@@ -1412,26 +1463,57 @@ export default function App() {
 
                   <div>
                     <label className="block text-xs font-medium text-stone-700 mb-1">
-                      Unggah Bukti Transfer Pembayaran (Untuk Approval Admin)
+                      Unggah Bukti Transfer / Nota Pembayaran (Wajib untuk Approval)
                     </label>
-                    <label className="flex flex-col items-center justify-center border-2 border-dashed border-stone-300 rounded-xl p-4 cursor-pointer hover:border-stone-900 bg-stone-50 transition-colors">
-                      <Upload className="w-5 h-5 text-stone-500 mb-1" />
-                      <span className="text-xs font-medium text-stone-700">
-                        {checkoutForm.paymentProofData
-                          ? 'Bukti Transfer Berhasil Dilampirkan (Klik untuk ganti)'
-                          : 'Klik untuk memilih foto / tangkapan layar bukti transfer'}
-                      </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) =>
-                          handleReceiptFileChange(e, (base64) =>
-                            setCheckoutForm({ ...checkoutForm, paymentProofData: base64 })
-                          )
-                        }
-                      />
-                    </label>
+                    {checkoutForm.paymentProofData ? (
+                      <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img
+                            src={checkoutForm.paymentProofData}
+                            alt="Bukti Transfer Dilampirkan"
+                            className="w-12 h-12 object-cover rounded-lg border border-emerald-300 shrink-0 bg-white"
+                          />
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-emerald-950 truncate">
+                              Nota Bukti Transfer Terlampir
+                            </p>
+                            <p className="text-[11px] text-emerald-700">
+                              Siap diverifikasi oleh Admin Keuangan
+                            </p>
+                          </div>
+                        </div>
+                        <label className="px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:text-emerald-950 bg-emerald-100 hover:bg-emerald-200 rounded-lg cursor-pointer transition-colors shrink-0">
+                          Ganti
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) =>
+                              handleReceiptFileChange(e, (base64) =>
+                                setCheckoutForm({ ...checkoutForm, paymentProofData: base64 })
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center border-2 border-dashed border-stone-300 rounded-xl p-4 cursor-pointer hover:border-stone-900 bg-stone-50 transition-colors">
+                        <Upload className="w-5 h-5 text-stone-500 mb-1" />
+                        <span className="text-xs font-medium text-stone-700">
+                          Klik untuk memilih foto / tangkapan layar bukti transfer
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) =>
+                            handleReceiptFileChange(e, (base64) =>
+                              setCheckoutForm({ ...checkoutForm, paymentProofData: base64 })
+                            )
+                          }
+                        />
+                      </label>
+                    )}
                   </div>
                 </form>
               )}

@@ -16,12 +16,17 @@ import {
   upsertCustomerFromAdmin,
 } from './src/db/repository.ts';
 
+import { handleDatabaseDiagnostic } from './src/diagnostic.ts';
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   // Increase payload limit for Base64 payment receipt uploads
   app.use(express.json({ limit: '10mb' }));
+
+  // Diagnostic Endpoint to verify live PostgreSQL Cloud SQL connection
+  app.get('/api/database-status', handleDatabaseDiagnostic);
 
   // 1. Public Catalog API (12 Products, 3 Categories, Search & Filter)
   app.get('/api/catalog', async (req, res) => {
